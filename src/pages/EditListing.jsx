@@ -6,17 +6,18 @@ import {
   uploadBytesResumable,
   getDownloadURL,
 } from "firebase/storage";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { doc, updateDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase.config";
-import { useNavigate } from "react-router-dom";
-import Spinner from "../components/Spinner";
-import { v4 as uuidv4 } from "uuid";
+import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "react-toastify";
+import { v4 as uuidv4 } from "uuid";
+import Spinner from "../components/Spinner";
 
-function CreateListing() {
+function EditListing() {
   // eslint-disable-next-line
-  const [geolocationEnabled, setGeolocationEnabled] = useState(false);
+  const [geolocationEnabled, setGeolocationEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [listing, setListing] = useState(false);
   const [formData, setFormData] = useState({
     type: "rent",
     name: "",
@@ -25,7 +26,7 @@ function CreateListing() {
     parking: false,
     furnished: false,
     address: "",
-    offer: true,
+    offer: false,
     regularPrice: 0,
     discountedPrice: 0,
     images: {},
@@ -51,9 +52,37 @@ function CreateListing() {
 
   const auth = getAuth();
   const navigate = useNavigate();
-
+  const params = useParams();
   const isMounted = useRef(true);
 
+  // Redirect if listing is not user's
+  useEffect(() => {
+    if (listing && listing.userRef !== auth.currentUser.uid) {
+      toast.error("You can not edit that listing");
+      navigate("/");
+    }
+  });
+
+  // Fetch listing to edit
+  useEffect(() => {
+    setLoading(true);
+    const fetchListing = async () => {
+      const docRef = doc(db, "listings", params.listingId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setListing(docSnap.data());
+        setFormData({ ...docSnap.data(), address: docSnap.data().location });
+        setLoading(false);
+      } else {
+        navigate("/");
+        toast.error("Listing does not exist");
+      }
+    };
+
+    fetchListing();
+  }, [params.listingId, navigate]);
+
+  // Sets userRef to logged in user
   useEffect(() => {
     if (isMounted) {
       onAuthStateChanged(auth, (user) => {
@@ -68,7 +97,7 @@ function CreateListing() {
     return () => {
       isMounted.current = false;
     };
-    //eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMounted]);
 
   const onSubmit = async (e) => {
@@ -78,13 +107,13 @@ function CreateListing() {
 
     if (discountedPrice >= regularPrice) {
       setLoading(false);
-      toast.error("Discounted Price needs to be less than Regular Price");
+      toast.error("Discounted price needs to be less than regular price");
       return;
     }
 
     if (images.length > 6) {
       setLoading(false);
-      toast.error("Maximum 6 images!");
+      toast.error("Max 6 images");
       return;
     }
 
@@ -93,7 +122,7 @@ function CreateListing() {
 
     if (geolocationEnabled) {
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&key=AIzaSyAj1lg0Thhg1wWSABx9pe61HJteo4ysLII`
+        `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&key=${process.env.REACT_APP_GEOCODE_API_KEY}`
       );
 
       const data = await response.json();
@@ -114,11 +143,9 @@ function CreateListing() {
     } else {
       geolocation.lat = latitude;
       geolocation.lng = longitude;
-
-      location = address;
     }
 
-    //store images in firebase
+    // Store image in firebase
     const storeImage = async (image) => {
       return new Promise((resolve, reject) => {
         const storage = getStorage();
@@ -159,7 +186,7 @@ function CreateListing() {
       });
     };
 
-    const imageUrls = await Promise.all(
+    const imgUrls = await Promise.all(
       [...images].map((image) => storeImage(image))
     ).catch(() => {
       setLoading(false);
@@ -169,22 +196,22 @@ function CreateListing() {
 
     const formDataCopy = {
       ...formData,
-      imageUrls,
+      imgUrls,
       geolocation,
       timestamp: serverTimestamp(),
     };
 
+    formDataCopy.location = address;
     delete formDataCopy.images;
     delete formDataCopy.address;
-    location && (formDataCopy.location = location);
     !formDataCopy.offer && delete formDataCopy.discountedPrice;
 
-    const docRef = await addDoc(collection(db, "listings"), formDataCopy);
+    // Update listing
+    const docRef = doc(db, "listings", params.listingId);
+    await updateDoc(docRef, formDataCopy);
     setLoading(false);
     toast.success("Listing saved");
     navigate(`/category/${formDataCopy.type}/${docRef.id}`);
-
-    setLoading(false);
   };
 
   const onMutate = (e) => {
@@ -193,13 +220,11 @@ function CreateListing() {
     if (e.target.value === "true") {
       boolean = true;
     }
-
     if (e.target.value === "false") {
       boolean = false;
     }
 
-    //files
-
+    // Files
     if (e.target.files) {
       setFormData((prevState) => ({
         ...prevState,
@@ -207,7 +232,7 @@ function CreateListing() {
       }));
     }
 
-    //Text/Boolean/Numbers
+    // Text/Booleans/Numbers
     if (!e.target.files) {
       setFormData((prevState) => ({
         ...prevState,
@@ -223,7 +248,7 @@ function CreateListing() {
   return (
     <div className="profile">
       <header>
-        <p className="pageHeader">Create a Listing</p>
+        <p className="pageHeader">Edit Listing</p>
       </header>
 
       <main>
@@ -249,6 +274,7 @@ function CreateListing() {
               Rent
             </button>
           </div>
+
           <label className="formLabel">Name</label>
           <input
             className="formInputName"
@@ -448,9 +474,8 @@ function CreateListing() {
             multiple
             required
           />
-
           <button type="submit" className="primaryButton createListingButton">
-            Create Listing
+            Edit Listing
           </button>
         </form>
       </main>
@@ -458,4 +483,4 @@ function CreateListing() {
   );
 }
 
-export default CreateListing;
+export default EditListing;
